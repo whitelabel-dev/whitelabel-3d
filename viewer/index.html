@@ -127,18 +127,28 @@
       </div>
 
       <div>
-        <h2>Try a sample</h2>
+        <h2>Tour a space</h2>
         <div style="display: flex; flex-direction: column; gap: 6px;">
-          <button data-sample="damaged-helmet.glb">Mechanical object (Helmet)</button>
+          <button data-sample="LittlestTokyo.glb">🏙️ Mini Tokyo (city block)</button>
+          <button data-sample="ABeautifulGame.glb">♟️ Chess scene (room-scale)</button>
+        </div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.4;">
+          Hit <b>Walk mode</b> below to navigate first-person (WASD + mouse).
+        </div>
+      </div>
+
+      <div>
+        <h2>Inspect an object</h2>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <button data-sample="damaged-helmet.glb">Mechanical (Helmet)</button>
           <button data-sample="vehicle.glb">Vehicle (Toy Car)</button>
-          <button data-sample="avocado.glb">Organic detail (Avocado)</button>
+          <button data-sample="avocado.glb">Organic (Avocado)</button>
           <button data-sample="object.glb">Audio gear (BoomBox)</button>
           <button data-sample="character.glb">Character (CesiumMan)</button>
           <button data-sample="train.splat" data-experimental="true">Gaussian Splat (beta)</button>
         </div>
-        <div style="font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.45;">
-          Samples are Khronos glTF reference models — every detail PBR-rendered.<br>
-          <span style="opacity: 0.7;">Splat = experimental; format compatibility still being tuned. Drop your own .ply / .glb / MatterPak on the page anytime.</span>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.4;">
+          Khronos glTF reference models — drag-and-drop your own anytime.
         </div>
       </div>
 
@@ -152,9 +162,10 @@
 
       <div>
         <h2>Controls</h2>
-        <div class="info-row"><span>Orbit</span><span class="v">left-drag</span></div>
-        <div class="info-row"><span>Pan</span><span class="v">right-drag</span></div>
-        <div class="info-row"><span>Zoom</span><span class="v">scroll</span></div>
+        <div class="info-row" id="orbit-hint"><span>Orbit</span><span class="v">left-drag</span></div>
+        <div class="info-row" id="orbit-hint-2"><span>Pan</span><span class="v">right-drag</span></div>
+        <div class="info-row" id="orbit-hint-3"><span>Zoom</span><span class="v">scroll</span></div>
+        <button id="walk-toggle">🚶 Walk mode (WASD)</button>
         <button id="reset">Reset camera</button>
         <button id="wireframe">Toggle wireframe</button>
       </div>
@@ -187,6 +198,7 @@
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
     import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
@@ -558,6 +570,87 @@
       if (fs && fs.length) loadFiles(fs);
     });
 
+    // ──────── First-person Walk mode ────────
+    let walkControls = null;
+    let walkActive = false;
+    const walkKeys = { w: false, a: false, s: false, d: false, shift: false, space: false };
+    const walkVelocity = new THREE.Vector3();
+    const walkDirection = new THREE.Vector3();
+    const walkClock = new THREE.Clock();
+    const WALK_SPEED = 3.5;       // m/s
+    const RUN_SPEED = 7.0;        // m/s with shift
+
+    function enableWalk() {
+      if (walkActive) return;
+      walkControls = new PointerLockControls(camera, canvas);
+      scene.add(walkControls.object);  // wraps camera
+      walkControls.addEventListener("unlock", () => disableWalk());
+      controls.enabled = false;
+      walkActive = true;
+      walkClock.start();
+
+      // Eye-level start position relative to current camera position
+      const lookDir = new THREE.Vector3();
+      camera.getWorldDirection(lookDir);
+      camera.position.y = Math.max(1.6, camera.position.y);  // ~human eye height
+
+      canvas.style.cursor = "none";
+      walkControls.lock();
+      document.getElementById("walk-toggle").textContent = "🚶 Walking — Esc to exit";
+      setStatus("Walking: W/A/S/D · mouse-look · Shift=run · Esc=exit", true);
+    }
+
+    function disableWalk() {
+      if (!walkActive) return;
+      walkActive = false;
+      try { walkControls.dispose(); } catch (_) {}
+      walkControls = null;
+      controls.enabled = true;
+      canvas.style.cursor = "";
+      document.getElementById("walk-toggle").textContent = "🚶 Walk mode (WASD)";
+      setStatus("Walk mode off");
+    }
+
+    document.getElementById("walk-toggle").addEventListener("click", () => {
+      if (walkActive) disableWalk(); else enableWalk();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (!walkActive) return;
+      switch (e.code) {
+        case "KeyW": walkKeys.w = true; break;
+        case "KeyA": walkKeys.a = true; break;
+        case "KeyS": walkKeys.s = true; break;
+        case "KeyD": walkKeys.d = true; break;
+        case "ShiftLeft": case "ShiftRight": walkKeys.shift = true; break;
+        case "Space": walkKeys.space = true; e.preventDefault(); break;
+      }
+    });
+    document.addEventListener("keyup", (e) => {
+      switch (e.code) {
+        case "KeyW": walkKeys.w = false; break;
+        case "KeyA": walkKeys.a = false; break;
+        case "KeyS": walkKeys.s = false; break;
+        case "KeyD": walkKeys.d = false; break;
+        case "ShiftLeft": case "ShiftRight": walkKeys.shift = false; break;
+        case "Space": walkKeys.space = false; break;
+      }
+    });
+
+    function updateWalk(dt) {
+      if (!walkActive || !walkControls) return;
+      const speed = walkKeys.shift ? RUN_SPEED : WALK_SPEED;
+      walkVelocity.x -= walkVelocity.x * 10 * dt;
+      walkVelocity.z -= walkVelocity.z * 10 * dt;
+      walkDirection.z = Number(walkKeys.w) - Number(walkKeys.s);
+      walkDirection.x = Number(walkKeys.d) - Number(walkKeys.a);
+      walkDirection.normalize();
+      if (walkKeys.w || walkKeys.s) walkVelocity.z -= walkDirection.z * speed * 40 * dt;
+      if (walkKeys.a || walkKeys.d) walkVelocity.x -= walkDirection.x * speed * 40 * dt;
+      walkControls.moveRight(-walkVelocity.x * dt);
+      walkControls.moveForward(-walkVelocity.z * dt);
+    }
+
     // Sample loaders — fetch the file then push through the normal loader.
     // Buttons declare their target via data-sample="filename" so we can have
     // many samples without N near-identical handlers.
@@ -601,14 +694,17 @@
     //     directly leaves the SplatMesh in the scene but invisible.
     function tick() {
       requestAnimationFrame(tick);
-      controls.update();
+      const dt = Math.min(0.05, walkClock.getDelta());  // clamp to avoid huge jumps
+      if (walkActive) {
+        updateWalk(dt);
+      } else {
+        controls.update();
+      }
       if (splatViewer) {
         try {
           splatViewer.update();
           splatViewer.render();
-        } catch (err) {
-          // First few frames during splat init may throw; tolerated briefly
-        }
+        } catch (err) {}
       } else {
         renderer.render(scene, camera);
       }
