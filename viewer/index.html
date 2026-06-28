@@ -6,12 +6,14 @@
   <title>whitelabel-3d · world-model viewer</title>
   <style>
     :root {
-      --bg: #0e1410;
-      --panel: #161e19;
-      --text: #e8efe9;
-      --muted: #6f8478;
-      --accent: #4cc38a;
-      --border: rgba(255,255,255,0.08);
+      --bg: #ffffff;
+      --panel: #f7f7f6;
+      --text: #18181b;
+      --muted: #71717a;
+      --accent: #18181b;
+      --accent-soft: #3f3f46;
+      --border: rgba(24,24,27,0.08);
+      --canvas-bg: #ececec;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif; overflow: hidden; }
@@ -33,11 +35,18 @@
       font-size: 14px;
       letter-spacing: 0.02em;
     }
-    .brand .dot {
-      width: 10px; height: 10px;
-      background: var(--accent);
+    .brand .mark {
+      width: 18px; height: 18px;
       border-radius: 50%;
-      box-shadow: 0 0 12px var(--accent);
+      border: 2.5px solid var(--accent);
+      position: relative;
+    }
+    .brand .mark::after {
+      content: '';
+      position: absolute;
+      inset: 3px;
+      border-radius: 50%;
+      background: var(--accent);
     }
     h2 {
       font-size: 11px;
@@ -56,9 +65,10 @@
       transition: border-color .15s, background .15s;
       font-size: 13px;
       line-height: 1.5;
+      color: var(--text);
     }
-    .drop-zone.hover { border-color: var(--accent); background: rgba(76,195,138,0.06); }
-    .drop-zone strong { color: var(--accent); display: block; margin-bottom: 4px; font-size: 13px; }
+    .drop-zone.hover { border-color: var(--accent); background: rgba(24,24,27,0.04); }
+    .drop-zone strong { color: var(--text); display: block; margin-bottom: 4px; font-size: 13px; }
     .drop-zone small { color: var(--muted); }
     .info-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); padding: 4px 0; }
     .info-row .v { color: var(--text); font-variant-numeric: tabular-nums; }
@@ -80,7 +90,7 @@
       bottom: 18px;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(0,0,0,0.5);
+      background: rgba(255,255,255,0.85);
       backdrop-filter: blur(10px);
       padding: 8px 14px;
       border-radius: 18px;
@@ -94,7 +104,7 @@
       color: var(--muted);
       padding: 4px 0;
     }
-    .status.loaded { color: var(--accent); }
+    .status.loaded { color: #15803d; }
     a { color: var(--accent); text-decoration: none; }
   </style>
 </head>
@@ -102,8 +112,8 @@
   <div id="app">
     <aside>
       <div class="brand">
-        <span class="dot"></span>
-        <span>whitelabel-3d</span>
+        <span class="mark"></span>
+        <span>whitelabel·3d</span>
       </div>
 
       <div>
@@ -189,7 +199,7 @@
     renderer.toneMappingExposure = 1.0;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0e1410);
+    scene.background = new THREE.Color(0xececec);
 
     const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 1000);
     camera.position.set(3, 2, 4);
@@ -197,8 +207,8 @@
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
 
-    // Soft floor grid for spatial reference
-    const grid = new THREE.GridHelper(20, 20, 0x2a3a30, 0x1a241e);
+    // Soft floor grid for spatial reference (light-mode tones)
+    const grid = new THREE.GridHelper(20, 20, 0xb0b0b0, 0xd0d0d0);
     grid.position.y = -0.001;
     scene.add(grid);
 
@@ -382,35 +392,44 @@
       });
 
       setStatus("Parsing splat (10-30s on first load)…");
+      console.log(`[splat] loading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+      const format = file.name.toLowerCase().endsWith(".splat")
+        ? GaussianSplats3D.SceneFormat.Splat
+        : file.name.toLowerCase().endsWith(".ksplat")
+        ? GaussianSplats3D.SceneFormat.KSplat
+        : GaussianSplats3D.SceneFormat.Ply;
+      console.log(`[splat] format = ${format} (Splat=0 KSplat=1 Ply=2)`);
+
       try {
-        const format = file.name.toLowerCase().endsWith(".splat")
-          ? GaussianSplats3D.SceneFormat.Splat
-          : file.name.toLowerCase().endsWith(".ksplat")
-          ? GaussianSplats3D.SceneFormat.KSplat
-          : GaussianSplats3D.SceneFormat.Ply;
         await splatViewer.addSplatScene(url, {
           progressiveLoad: false,
           showLoadingUI: false,
           format,
         });
+        console.log(`[splat] addSplatScene resolved`);
       } catch (err) {
-        console.error("splat load error:", err);
+        console.error("[splat] load error:", err);
         setStatus(`Splat load failed: ${err.message}`);
         return;
       }
 
-      // After load, frame the camera to the splat's actual bounding box.
-      // The library exposes the SplatMesh via getSplatMesh(); we frame to its
-      // Three.js bounding box for a sensible initial view.
+      // After load — give the library 1 frame to populate, then frame.
+      await new Promise(r => requestAnimationFrame(r));
+
+      let framed = false;
       try {
-        const splatMesh = splatViewer.getSplatMesh();
+        const splatMesh = splatViewer.getSplatMesh ? splatViewer.getSplatMesh() : null;
+        console.log(`[splat] splatMesh =`, splatMesh);
         if (splatMesh) {
+          // Force a matrix update so the bounding box is correct
+          splatMesh.updateMatrixWorld(true);
           const box = new THREE.Box3().setFromObject(splatMesh);
-          if (isFinite(box.max.x - box.min.x)) {
-            const size = box.getSize(new THREE.Vector3());
-            const center = box.getCenter(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z);
-            const camDist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.4;
+          console.log(`[splat] bounding box:`, box);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z);
+          if (isFinite(maxDim) && maxDim > 0.001) {
+            const camDist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.6;
             camera.position.copy(center).add(new THREE.Vector3(camDist * 0.6, camDist * 0.4, camDist * 0.9));
             camera.near = Math.max(0.001, maxDim / 1000);
             camera.far = maxDim * 100;
@@ -419,13 +438,34 @@
             controls.update();
             document.getElementById("i-bounds").textContent =
               `${size.x.toFixed(1)} × ${size.y.toFixed(1)} × ${size.z.toFixed(1)}`;
+            framed = true;
+            console.log(`[splat] auto-framed at distance ${camDist.toFixed(2)}, target`, center);
           }
         }
       } catch (err) {
-        console.warn("could not auto-frame splat:", err);
+        console.warn("[splat] auto-frame failed:", err);
       }
 
-      document.getElementById("i-verts").textContent = "—";
+      // Robust fallback: if framing didn't work, place camera somewhere
+      // sensible for a generic scan rather than leaving it inside the splat.
+      if (!framed) {
+        console.log(`[splat] using fallback camera position`);
+        camera.position.set(4, 3, 6);
+        camera.near = 0.05;
+        camera.far = 1000;
+        camera.updateProjectionMatrix();
+        controls.target.set(0, 0, 0);
+        controls.update();
+        document.getElementById("i-bounds").textContent = "fallback view";
+      }
+
+      // Splat statistics
+      let splatCount = "—";
+      try {
+        const sm = splatViewer.getSplatMesh && splatViewer.getSplatMesh();
+        if (sm && sm.getSplatCount) splatCount = sm.getSplatCount().toLocaleString();
+      } catch (_) {}
+      document.getElementById("i-verts").textContent = splatCount;
       document.getElementById("i-tris").textContent = "—";
       document.getElementById("i-mats").textContent = "Gaussian Splat";
     }
@@ -554,7 +594,7 @@
     // Demo placeholder cube so the canvas isn't empty
     const placeholder = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x4cc38a, roughness: 0.5, metalness: 0.1, wireframe: true })
+      new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.5, metalness: 0.1, wireframe: true })
     );
     placeholder.position.y = 0.5;
     placeholder.name = "placeholder";
