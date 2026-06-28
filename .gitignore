@@ -1,6 +1,6 @@
 .vercel
-viewer/samples/*.splat
-viewer/samples/*.glb
-viewer/samples/*.ply
-viewer/samples/*.ksplat
-viewer/samples/*.zip
+
+# samples/ is COMMITTED so the deployed viewer at 3d.whitelabel.dev
+# has demo files available. Keep them small (<50MB each) so deploys
+# stay quick.
+# (intentionally not ignoring viewer/samples/*)
