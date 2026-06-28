@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/samples/:path*", "destination": "/viewer/samples/:path*" },
     { "source": "/", "destination": "/viewer/index.html" }
   ]
 }
