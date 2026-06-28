@@ -129,12 +129,16 @@
       <div>
         <h2>Try a sample</h2>
         <div style="display: flex; flex-direction: column; gap: 6px;">
-          <button id="sample-splat">🔥 Gaussian Splat (31MB)</button>
-          <button id="sample-gltf">glTF demo (Damaged Helmet)</button>
+          <button data-sample="damaged-helmet.glb">Mechanical object (Helmet)</button>
+          <button data-sample="vehicle.glb">Vehicle (Toy Car)</button>
+          <button data-sample="avocado.glb">Organic detail (Avocado)</button>
+          <button data-sample="object.glb">Audio gear (BoomBox)</button>
+          <button data-sample="character.glb">Character (CesiumMan)</button>
+          <button data-sample="train.splat" data-experimental="true">Gaussian Splat (beta)</button>
         </div>
-        <div style="font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.4;">
-          Splat sample is "train" from the 3D Gaussian Splatting reference dataset.<br>
-          glTF sample is Khronos' Damaged Helmet (PBR test).
+        <div style="font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.45;">
+          Samples are Khronos glTF reference models — every detail PBR-rendered.<br>
+          <span style="opacity: 0.7;">Splat = experimental; format compatibility still being tuned. Drop your own .ply / .glb / MatterPak on the page anytime.</span>
         </div>
       </div>
 
@@ -554,8 +558,10 @@
       if (fs && fs.length) loadFiles(fs);
     });
 
-    // Sample loaders — fetch the file then push through the normal loader
-    async function loadSampleUrl(url, asSplat = false) {
+    // Sample loaders — fetch the file then push through the normal loader.
+    // Buttons declare their target via data-sample="filename" so we can have
+    // many samples without N near-identical handlers.
+    async function loadSampleUrl(url) {
       setStatus(`Fetching ${url.split("/").pop()}…`);
       const resp = await fetch(url);
       if (!resp.ok) {
@@ -566,11 +572,8 @@
       const file = new File([blob], url.split("/").pop(), { type: blob.type });
       await loadFiles([file]);
     }
-    document.getElementById("sample-splat").addEventListener("click", () => {
-      loadSampleUrl("samples/train.splat", true);
-    });
-    document.getElementById("sample-gltf").addEventListener("click", () => {
-      loadSampleUrl("samples/damaged-helmet.glb", false);
+    document.querySelectorAll("button[data-sample]").forEach((btn) => {
+      btn.addEventListener("click", () => loadSampleUrl(`samples/${btn.dataset.sample}`));
     });
 
     // Buttons
@@ -590,16 +593,25 @@
       }
     });
 
-    // Render loop — always renders OUR scene (which includes the splat mesh as
-    // a child after loadSplatFile). When a splat is active we additionally call
-    // splatViewer.update() for splat-specific GPU sort + housekeeping.
+    // Render loop —
+    //   • mesh path: standard renderer.render(scene, camera)
+    //   • splat path: splatViewer.update() does GPU sort, splatViewer.render()
+    //     internally runs renderer.render with the right shader uniforms. The
+    //     library REQUIRES its own render() call; calling renderer.render
+    //     directly leaves the SplatMesh in the scene but invisible.
     function tick() {
       requestAnimationFrame(tick);
       controls.update();
       if (splatViewer) {
-        try { splatViewer.update(); } catch (_) {}
+        try {
+          splatViewer.update();
+          splatViewer.render();
+        } catch (err) {
+          // First few frames during splat init may throw; tolerated briefly
+        }
+      } else {
+        renderer.render(scene, camera);
       }
-      renderer.render(scene, camera);
     }
     tick();
 
