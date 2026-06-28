@@ -354,42 +354,44 @@
     let splatViewer = null;  // Lazy-init the Gaussian Splat viewer
 
     async function loadSplatFile(file) {
-      // Gaussian Splat — render via @mkkellogg/gaussian-splats-3d in
-      // integrated mode (shares our renderer + camera + controls).
+      // Gaussian Splat — integrated mode: splat is added as a child of OUR
+      // scene, rendered by OUR renderer in the normal tick loop. We just
+      // call splatViewer.update() each frame for splat-specific housekeeping.
       if (splatViewer) {
         try { await splatViewer.dispose(); } catch (_) {}
         splatViewer = null;
       }
       disposeRoot();
-      // Hide grid while splat is loaded (the scene IS the splat)
       grid.visible = false;
 
       const url = URL.createObjectURL(file);
 
-      // Integrated mode — share renderer / camera with our existing scene
       splatViewer = new GaussianSplats3D.Viewer({
         selfDrivenMode: false,
         renderer: renderer,
         camera: camera,
+        threeScene: scene,                  // splat becomes a child of our scene
         useBuiltInControls: false,
-        threeScene: scene,
         sharedMemoryForWorkers: false,
         gpuAcceleratedSort: true,
         dynamicScene: false,
         sceneRevealMode: GaussianSplats3D.SceneRevealMode.Instant,
         ignoreDevicePixelRatio: false,
+        antialiased: false,
+        logLevel: GaussianSplats3D.LogLevel.Info,
       });
 
-      setStatus("Parsing splat (this may take 10-30s for first load)…");
+      setStatus("Parsing splat (10-30s on first load)…");
       try {
+        const format = file.name.toLowerCase().endsWith(".splat")
+          ? GaussianSplats3D.SceneFormat.Splat
+          : file.name.toLowerCase().endsWith(".ksplat")
+          ? GaussianSplats3D.SceneFormat.KSplat
+          : GaussianSplats3D.SceneFormat.Ply;
         await splatViewer.addSplatScene(url, {
           progressiveLoad: false,
           showLoadingUI: false,
-          format: file.name.toLowerCase().endsWith(".splat")
-            ? GaussianSplats3D.SceneFormat.Splat
-            : file.name.toLowerCase().endsWith(".ksplat")
-            ? GaussianSplats3D.SceneFormat.KSplat
-            : GaussianSplats3D.SceneFormat.Ply,
+          format,
         });
       } catch (err) {
         console.error("splat load error:", err);
@@ -397,15 +399,35 @@
         return;
       }
 
-      // Position camera to a sensible viewing angle for a splat scene
-      camera.position.set(0, 2, 5);
-      controls.target.set(0, 0, 0);
-      controls.update();
+      // After load, frame the camera to the splat's actual bounding box.
+      // The library exposes the SplatMesh via getSplatMesh(); we frame to its
+      // Three.js bounding box for a sensible initial view.
+      try {
+        const splatMesh = splatViewer.getSplatMesh();
+        if (splatMesh) {
+          const box = new THREE.Box3().setFromObject(splatMesh);
+          if (isFinite(box.max.x - box.min.x)) {
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const camDist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.4;
+            camera.position.copy(center).add(new THREE.Vector3(camDist * 0.6, camDist * 0.4, camDist * 0.9));
+            camera.near = Math.max(0.001, maxDim / 1000);
+            camera.far = maxDim * 100;
+            camera.updateProjectionMatrix();
+            controls.target.copy(center);
+            controls.update();
+            document.getElementById("i-bounds").textContent =
+              `${size.x.toFixed(1)} × ${size.y.toFixed(1)} × ${size.z.toFixed(1)}`;
+          }
+        }
+      } catch (err) {
+        console.warn("could not auto-frame splat:", err);
+      }
 
       document.getElementById("i-verts").textContent = "—";
       document.getElementById("i-tris").textContent = "—";
       document.getElementById("i-mats").textContent = "Gaussian Splat";
-      document.getElementById("i-bounds").textContent = "splat scene";
     }
 
     async function loadFiles(files) {
@@ -516,20 +538,16 @@
       }
     });
 
-    // Render loop — handles both regular meshes AND active splat viewer
+    // Render loop — always renders OUR scene (which includes the splat mesh as
+    // a child after loadSplatFile). When a splat is active we additionally call
+    // splatViewer.update() for splat-specific GPU sort + housekeeping.
     function tick() {
       requestAnimationFrame(tick);
       controls.update();
       if (splatViewer) {
-        try {
-          splatViewer.update();
-          splatViewer.render();
-        } catch (err) {
-          // First few frames during splat init can throw; safe to ignore briefly
-        }
-      } else {
-        renderer.render(scene, camera);
+        try { splatViewer.update(); } catch (_) {}
       }
+      renderer.render(scene, camera);
     }
     tick();
 
