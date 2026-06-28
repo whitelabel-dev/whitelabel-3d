@@ -376,6 +376,14 @@
 
       const url = URL.createObjectURL(file);
 
+      // INRIA-format Gaussian Splat scenes use a Y-down + slight forward-tilt
+      // camera convention (NOT THREE.js's default Y-up). Setting cameraUp
+      // before init makes the splat actually appear right-side-up.
+      camera.up.set(0, -1, -0.17);
+      camera.position.set(-1.5, -1.5, 1.5);
+      controls.target.set(0, 0, 0);
+      controls.update();
+
       splatViewer = new GaussianSplats3D.Viewer({
         selfDrivenMode: false,
         renderer: renderer,
@@ -388,6 +396,9 @@
         sceneRevealMode: GaussianSplats3D.SceneRevealMode.Instant,
         ignoreDevicePixelRatio: false,
         antialiased: false,
+        cameraUp: [0, -1, -0.17],            // ← key for INRIA-format scenes
+        initialCameraPosition: [-1.5, -1.5, 1.5],
+        initialCameraLookAt: [0, 0, 0],
         logLevel: GaussianSplats3D.LogLevel.Info,
       });
 
@@ -446,17 +457,15 @@
         console.warn("[splat] auto-frame failed:", err);
       }
 
-      // Robust fallback: if framing didn't work, place camera somewhere
-      // sensible for a generic scan rather than leaving it inside the splat.
+      // Robust fallback: respect the INRIA-style camera convention we
+      // already set; don't reset camera.up here.
       if (!framed) {
         console.log(`[splat] using fallback camera position`);
-        camera.position.set(4, 3, 6);
+        // Already set camera.up + position above; just normalize near/far
         camera.near = 0.05;
         camera.far = 1000;
         camera.updateProjectionMatrix();
-        controls.target.set(0, 0, 0);
-        controls.update();
-        document.getElementById("i-bounds").textContent = "fallback view";
+        document.getElementById("i-bounds").textContent = "fallback view (Y-down)";
       }
 
       // Splat statistics
@@ -499,6 +508,9 @@
           try { await splatViewer.dispose(); } catch (_) {}
           splatViewer = null;
           grid.visible = true;
+          // Restore Y-up camera convention for mesh formats
+          camera.up.set(0, 1, 0);
+          controls.update();
         }
         disposeRoot();
         currentRoot = object;
