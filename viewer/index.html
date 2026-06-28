@@ -109,9 +109,9 @@
       <div>
         <h2>Load a model</h2>
         <label class="drop-zone" id="drop">
-          <input type="file" id="file" accept=".glb,.gltf,.usdz" hidden>
-          <strong>Drag a .glb here</strong>
-          <small>or click to browse · LiDAR scans · 3D Scanner App exports</small>
+          <input type="file" id="file" accept=".glb,.gltf,.usdz,.obj,.mtl,.jpg,.jpeg,.png" multiple hidden>
+          <strong>Drag a model here</strong>
+          <small>.glb / .gltf (single file) · .obj + .mtl + textures (multi-select for MatterPak)</small>
         </label>
         <div class="status" id="status">Ready</div>
       </div>
@@ -161,6 +161,8 @@
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+    import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
     import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
     const canvas = document.getElementById("stage");
@@ -216,7 +218,9 @@
     let currentRoot = null;
     let wireframeOn = false;
 
-    const loader = new GLTFLoader();
+    const gltfLoader = new GLTFLoader();
+    const objLoader = new OBJLoader();
+    const mtlLoader = new MTLLoader();
 
     function setStatus(msg, loaded = false) {
       statusEl.textContent = msg;
@@ -271,12 +275,58 @@
       document.getElementById("i-bounds").textContent = `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
     }
 
+    async function loadGltfBuffer(buffer, name) {
+      const gltf = await gltfLoader.parseAsync(buffer, "");
+      return gltf.scene;
+    }
+
+    async function loadObjText(text) {
+      // Drag-drop of a bare OBJ: render geometry without materials.
+      // Drop a whole MatterPak folder via "Choose Files" (cmd-click)
+      // and we can pair OBJ + MTL + textures by filename map.
+      return objLoader.parse(text);
+    }
+
+    function buildMaterialsManager(filesMap) {
+      // filesMap: Map<filename, File>. Lets MTL / OBJLoader find textures.
+      const manager = new THREE.LoadingManager();
+      manager.setURLModifier((url) => {
+        // Strip leading "./" or absolute paths down to basename for lookup
+        const basename = url.split("/").pop().split("\\").pop();
+        const file = filesMap.get(basename);
+        if (file) return URL.createObjectURL(file);
+        return url;
+      });
+      return manager;
+    }
+
+    async function loadMatterpakFiles(files) {
+      // Pick the OBJ + (optional) MTL out of multi-file drop
+      const map = new Map(files.map(f => [f.name, f]));
+      const objFile = files.find(f => /\.obj$/i.test(f.name));
+      const mtlFile = files.find(f => /\.mtl$/i.test(f.name));
+      if (!objFile) throw new Error("No .obj file in drop");
+
+      const manager = buildMaterialsManager(map);
+      const mtlLoaderLocal = new MTLLoader(manager);
+      const objLoaderLocal = new OBJLoader(manager);
+
+      if (mtlFile) {
+        const mtlText = await mtlFile.text();
+        const materials = mtlLoaderLocal.parse(mtlText, "");
+        materials.preload();
+        objLoaderLocal.setMaterials(materials);
+      }
+      const objText = await objFile.text();
+      return objLoaderLocal.parse(objText);
+    }
+
     async function loadModelFromArrayBuffer(buffer, name = "model") {
       setStatus("Parsing…");
       try {
-        const gltf = await loader.parseAsync(buffer, "");
+        const object = await loadGltfBuffer(buffer, name);
         disposeRoot();
-        currentRoot = gltf.scene;
+        currentRoot = object;
         scene.add(currentRoot);
         const { size } = frame(currentRoot);
         reportStats(currentRoot, size);
@@ -287,17 +337,43 @@
       }
     }
 
-    async function loadFile(file) {
+    async function loadFiles(files) {
+      // Accept: single .glb/.gltf, single .obj, or multi-file MatterPak drop
+      files = Array.from(files);
+      const file = files[0];
       setStatus(`Reading ${file.name}…`);
-      const buffer = await file.arrayBuffer();
-      await loadModelFromArrayBuffer(buffer, file.name);
+      try {
+        const isMulti = files.length > 1 && files.some(f => /\.obj$/i.test(f.name));
+        let object;
+        if (isMulti) {
+          object = await loadMatterpakFiles(files);
+        } else if (/\.obj$/i.test(file.name)) {
+          object = await loadObjText(await file.text());
+        } else {
+          const buffer = await file.arrayBuffer();
+          object = await loadGltfBuffer(buffer, file.name);
+        }
+        disposeRoot();
+        currentRoot = object;
+        scene.add(currentRoot);
+        const { size } = frame(currentRoot);
+        reportStats(currentRoot, size);
+        setStatus(`Loaded: ${file.name}`, true);
+      } catch (err) {
+        console.error(err);
+        setStatus(`Failed: ${err.message}`);
+      }
+    }
+
+    async function loadFile(file) {
+      await loadFiles([file]);
     }
 
     // File input + drag-and-drop
     const fileInput = document.getElementById("file");
     fileInput.addEventListener("change", (e) => {
-      const f = e.target.files?.[0];
-      if (f) loadFile(f);
+      const fs = e.target.files;
+      if (fs && fs.length) loadFiles(fs);
     });
     const dropZone = document.getElementById("drop");
     dropZone.addEventListener("click", () => fileInput.click());
@@ -315,8 +391,8 @@
       })
     );
     window.addEventListener("drop", (e) => {
-      const f = e.dataTransfer?.files?.[0];
-      if (f) loadFile(f);
+      const fs = e.dataTransfer?.files;
+      if (fs && fs.length) loadFiles(fs);
     });
 
     // Buttons
