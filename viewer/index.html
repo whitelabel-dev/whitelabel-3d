@@ -109,9 +109,9 @@
       <div>
         <h2>Load a model</h2>
         <label class="drop-zone" id="drop">
-          <input type="file" id="file" accept=".glb,.gltf,.usdz,.obj,.mtl,.jpg,.jpeg,.png" multiple hidden>
+          <input type="file" id="file" accept=".glb,.gltf,.usdz,.obj,.mtl,.jpg,.jpeg,.png,.ply,.splat,.ksplat" multiple hidden>
           <strong>Drag a model here</strong>
-          <small>.glb / .gltf (single file) · .obj + .mtl + textures (multi-select for MatterPak)</small>
+          <small>.glb / .gltf · .obj + .mtl + textures (MatterPak) · <b>.ply / .splat (Gaussian Splat)</b></small>
         </label>
         <div class="status" id="status">Ready</div>
       </div>
@@ -152,7 +152,8 @@
   {
     "imports": {
       "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/",
+      "@mkkellogg/gaussian-splats-3d": "https://unpkg.com/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"
     }
   }
   </script>
@@ -164,6 +165,7 @@
     import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
     import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
     import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+    import * as GaussianSplats3D from "@mkkellogg/gaussian-splats-3d";
 
     const canvas = document.getElementById("stage");
     const statusEl = document.getElementById("status");
@@ -337,12 +339,56 @@
       }
     }
 
+    let splatViewer = null;  // Lazy-init the Gaussian Splat viewer
+
+    async function loadSplatFile(file) {
+      // Gaussian Splat — render via @mkkellogg/gaussian-splats-3d.
+      // It manages its own Three.js scene/camera; we delegate the canvas to it.
+      if (splatViewer) {
+        await splatViewer.dispose();
+        splatViewer = null;
+      }
+      disposeRoot();
+
+      // Bridge: gaussian-splats-3d.Viewer expects either a URL or to manage
+      // file loading itself. For File objects we use a Blob URL.
+      const url = URL.createObjectURL(file);
+
+      splatViewer = new GaussianSplats3D.Viewer({
+        cameraUp: [0, 1, 0],
+        initialCameraPosition: [0, 1, 4],
+        initialCameraLookAt: [0, 0.7, 0],
+        rootElement: canvas.parentElement,
+        useBuiltInControls: true,
+        sharedMemoryForWorkers: false,  // safer for cross-origin
+      });
+
+      await splatViewer.addSplatScene(url, {
+        progressiveLoad: true,
+        showLoadingUI: false,
+      });
+      splatViewer.start();
+
+      document.getElementById("i-verts").textContent = "—";
+      document.getElementById("i-tris").textContent = "—";
+      document.getElementById("i-mats").textContent = "Gaussian Splat";
+      document.getElementById("i-bounds").textContent = "splat scene";
+    }
+
     async function loadFiles(files) {
-      // Accept: single .glb/.gltf, single .obj, or multi-file MatterPak drop
+      // Accept: single .glb/.gltf, single .obj, multi-file MatterPak,
+      // or a Gaussian Splat (.ply / .splat / .ksplat)
       files = Array.from(files);
       const file = files[0];
       setStatus(`Reading ${file.name}…`);
       try {
+        const isSplat = /\.(ply|splat|ksplat)$/i.test(file.name);
+        if (isSplat) {
+          await loadSplatFile(file);
+          setStatus(`Loaded splat: ${file.name}`, true);
+          return;
+        }
+
         const isMulti = files.length > 1 && files.some(f => /\.obj$/i.test(f.name));
         let object;
         if (isMulti) {
@@ -352,6 +398,11 @@
         } else {
           const buffer = await file.arrayBuffer();
           object = await loadGltfBuffer(buffer, file.name);
+        }
+        // Tear down any active splat viewer when switching to mesh
+        if (splatViewer) {
+          await splatViewer.dispose().catch(() => {});
+          splatViewer = null;
         }
         disposeRoot();
         currentRoot = object;
