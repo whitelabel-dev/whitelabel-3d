@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>whitelabel-3d · world-model viewer</title>
+  <style>
+    :root {
+      --bg: #0e1410;
+      --panel: #161e19;
+      --text: #e8efe9;
+      --muted: #6f8478;
+      --accent: #4cc38a;
+      --border: rgba(255,255,255,0.08);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif; overflow: hidden; }
+    #app { position: fixed; inset: 0; display: grid; grid-template-columns: 280px 1fr; }
+    aside {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+    }
+    .brand .dot {
+      width: 10px; height: 10px;
+      background: var(--accent);
+      border-radius: 50%;
+      box-shadow: 0 0 12px var(--accent);
+    }
+    h2 {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+      margin: 0 0 8px;
+    }
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 22px 14px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .drop-zone.hover { border-color: var(--accent); background: rgba(76,195,138,0.06); }
+    .drop-zone strong { color: var(--accent); display: block; margin-bottom: 4px; font-size: 13px; }
+    .drop-zone small { color: var(--muted); }
+    .info-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); padding: 4px 0; }
+    .info-row .v { color: var(--text); font-variant-numeric: tabular-nums; }
+    button {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    main { position: relative; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .hint {
+      position: absolute;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(10px);
+      padding: 8px 14px;
+      border-radius: 18px;
+      font-size: 11px;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      letter-spacing: 0.04em;
+    }
+    .status {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 4px 0;
+    }
+    .status.loaded { color: var(--accent); }
+    a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside>
+      <div class="brand">
+        <span class="dot"></span>
+        <span>whitelabel-3d</span>
+      </div>
+
+      <div>
+        <h2>Load a model</h2>
+        <label class="drop-zone" id="drop">
+          <input type="file" id="file" accept=".glb,.gltf,.usdz" hidden>
+          <strong>Drag a .glb here</strong>
+          <small>or click to browse · LiDAR scans · 3D Scanner App exports</small>
+        </label>
+        <div class="status" id="status">Ready</div>
+      </div>
+
+      <div>
+        <h2>Model</h2>
+        <div class="info-row"><span>Vertices</span><span class="v" id="i-verts">—</span></div>
+        <div class="info-row"><span>Triangles</span><span class="v" id="i-tris">—</span></div>
+        <div class="info-row"><span>Materials</span><span class="v" id="i-mats">—</span></div>
+        <div class="info-row"><span>Bounds (m)</span><span class="v" id="i-bounds">—</span></div>
+      </div>
+
+      <div>
+        <h2>Controls</h2>
+        <div class="info-row"><span>Orbit</span><span class="v">left-drag</span></div>
+        <div class="info-row"><span>Pan</span><span class="v">right-drag</span></div>
+        <div class="info-row"><span>Zoom</span><span class="v">scroll</span></div>
+        <button id="reset">Reset camera</button>
+        <button id="wireframe">Toggle wireframe</button>
+      </div>
+
+      <div style="margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border);">
+        <h2>What is this</h2>
+        <div style="font-size: 12px; line-height: 1.55; color: var(--muted);">
+          The viewer is v0.2 of the world-model substrate. Scan a room with the 3D Scanner App on iPhone, export as .glb, drop it here.
+          Eventually consumed by house-manager / office-manager / robotics / flow / accessibility.
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <canvas id="stage"></canvas>
+      <div class="hint">Drag-and-drop a .glb anywhere on this page</div>
+    </main>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+    const canvas = document.getElementById("stage");
+    const statusEl = document.getElementById("status");
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0e1410);
+
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 1000);
+    camera.position.set(3, 2, 4);
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+
+    // Soft floor grid for spatial reference
+    const grid = new THREE.GridHelper(20, 20, 0x2a3a30, 0x1a241e);
+    grid.position.y = -0.001;
+    scene.add(grid);
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.3);
+    scene.add(ambient);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+    sun.position.set(5, 8, 5);
+    scene.add(sun);
+
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.target.set(0, 1, 0);
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN,
+    };
+
+    function resize() {
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener("resize", resize);
+    new ResizeObserver(resize).observe(canvas);
+    resize();
+
+    let currentRoot = null;
+    let wireframeOn = false;
+
+    const loader = new GLTFLoader();
+
+    function setStatus(msg, loaded = false) {
+      statusEl.textContent = msg;
+      statusEl.classList.toggle("loaded", loaded);
+    }
+
+    function disposeRoot() {
+      if (!currentRoot) return;
+      scene.remove(currentRoot);
+      currentRoot.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) {
+          if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+          else o.material.dispose();
+        }
+      });
+      currentRoot = null;
+    }
+
+    function frame(object) {
+      const box = new THREE.Box3().setFromObject(object);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const camDist = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+      camera.position.copy(center).add(new THREE.Vector3(camDist * 0.9, camDist * 0.6, camDist * 0.9));
+      camera.near = Math.max(0.001, maxDim / 1000);
+      camera.far = maxDim * 100;
+      camera.updateProjectionMatrix();
+
+      controls.target.copy(center);
+      controls.update();
+
+      return { size, center };
+    }
+
+    function reportStats(object, size) {
+      let verts = 0, tris = 0;
+      const mats = new Set();
+      object.traverse((o) => {
+        if (o.isMesh && o.geometry) {
+          const g = o.geometry;
+          verts += g.attributes.position?.count ?? 0;
+          tris += (g.index ? g.index.count : g.attributes.position?.count ?? 0) / 3;
+          if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => mats.add(m));
+        }
+      });
+      document.getElementById("i-verts").textContent = verts.toLocaleString();
+      document.getElementById("i-tris").textContent = Math.floor(tris).toLocaleString();
+      document.getElementById("i-mats").textContent = String(mats.size);
+      document.getElementById("i-bounds").textContent = `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`;
+    }
+
+    async function loadModelFromArrayBuffer(buffer, name = "model") {
+      setStatus("Parsing…");
+      try {
+        const gltf = await loader.parseAsync(buffer, "");
+        disposeRoot();
+        currentRoot = gltf.scene;
+        scene.add(currentRoot);
+        const { size } = frame(currentRoot);
+        reportStats(currentRoot, size);
+        setStatus(`Loaded: ${name}`, true);
+      } catch (err) {
+        console.error(err);
+        setStatus(`Failed: ${err.message}`);
+      }
+    }
+
+    async function loadFile(file) {
+      setStatus(`Reading ${file.name}…`);
+      const buffer = await file.arrayBuffer();
+      await loadModelFromArrayBuffer(buffer, file.name);
+    }
+
+    // File input + drag-and-drop
+    const fileInput = document.getElementById("file");
+    fileInput.addEventListener("change", (e) => {
+      const f = e.target.files?.[0];
+      if (f) loadFile(f);
+    });
+    const dropZone = document.getElementById("drop");
+    dropZone.addEventListener("click", () => fileInput.click());
+
+    ["dragenter", "dragover"].forEach((evt) =>
+      window.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropZone.classList.add("hover");
+      })
+    );
+    ["dragleave", "drop"].forEach((evt) =>
+      window.addEventListener(evt, (e) => {
+        e.preventDefault();
+        dropZone.classList.remove("hover");
+      })
+    );
+    window.addEventListener("drop", (e) => {
+      const f = e.dataTransfer?.files?.[0];
+      if (f) loadFile(f);
+    });
+
+    // Buttons
+    document.getElementById("reset").addEventListener("click", () => {
+      if (currentRoot) frame(currentRoot);
+    });
+    document.getElementById("wireframe").addEventListener("click", () => {
+      wireframeOn = !wireframeOn;
+      if (currentRoot) {
+        currentRoot.traverse((o) => {
+          if (o.isMesh && o.material) {
+            (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+              if ("wireframe" in m) m.wireframe = wireframeOn;
+            });
+          }
+        });
+      }
+    });
+
+    // Render loop
+    function tick() {
+      requestAnimationFrame(tick);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    tick();
+
+    // Demo placeholder cube so the canvas isn't empty
+    const placeholder = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0x4cc38a, roughness: 0.5, metalness: 0.1, wireframe: true })
+    );
+    placeholder.position.y = 0.5;
+    placeholder.name = "placeholder";
+    scene.add(placeholder);
+    currentRoot = placeholder;
+
+    setStatus("Drop a .glb to start");
+  </script>
+</body>
+</html>
