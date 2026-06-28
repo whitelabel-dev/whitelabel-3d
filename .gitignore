@@ -1,1 +1,6 @@
 .vercel
+viewer/samples/*.splat
+viewer/samples/*.glb
+viewer/samples/*.ply
+viewer/samples/*.ksplat
+viewer/samples/*.zip
