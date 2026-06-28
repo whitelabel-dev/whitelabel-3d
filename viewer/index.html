@@ -127,13 +127,28 @@
       </div>
 
       <div>
-        <h2>Tour a space</h2>
+        <h2>360° Tour (real-world)</h2>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <button data-pano="abandoned_factory_canteen_01.hdr">🏭 Abandoned factory</button>
+          <button data-pano="abandoned_workshop_02.hdr">🔧 Workshop interior</button>
+          <button data-pano="wooden_lounge.hdr">🛋️ Wooden lounge</button>
+          <button data-pano="studio_small_09.hdr">🎬 Studio interior</button>
+          <button data-pano="modern_buildings_2.hdr">🏙️ Modern buildings</button>
+          <button data-pano="old_outdoor_theater.hdr">🎭 Outdoor theater</button>
+        </div>
+        <div style="font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.4;">
+          Real photographic 360° spaces (CC0 from Polyhaven). Drag to look around — like Google Street View.
+        </div>
+      </div>
+
+      <div>
+        <h2>3D mesh tour</h2>
         <div style="display: flex; flex-direction: column; gap: 6px;">
           <button data-sample="LittlestTokyo.glb">🏙️ Mini Tokyo (city block)</button>
           <button data-sample="ABeautifulGame.glb">♟️ Chess scene (room-scale)</button>
         </div>
         <div style="font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.4;">
-          Hit <b>Walk mode</b> below to navigate first-person (WASD + mouse).
+          Hit <b>🚶 Walk mode</b> below to fly through these in first-person.
         </div>
       </div>
 
@@ -203,6 +218,7 @@
     import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
     import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
     import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+    import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
     import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
     import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
     import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -596,8 +612,7 @@
     const walkVelocity = new THREE.Vector3();
     const walkDirection = new THREE.Vector3();
     const walkClock = new THREE.Clock();
-    const WALK_SPEED = 3.5;       // m/s
-    const RUN_SPEED = 7.0;        // m/s with shift
+    const WALK_SPEED = 12.0;      // m/s — fast enough to traverse large scenes
 
     function enableWalk() {
       if (walkActive) return;
@@ -616,7 +631,7 @@
       canvas.style.cursor = "none";
       walkControls.lock();
       document.getElementById("walk-toggle").textContent = "🚶 Walking — Esc to exit";
-      setStatus("Walking: W/A/S/D · mouse-look · Shift=run · Esc=exit", true);
+      setStatus("Fly mode: W/A/S/D · Space=up · Shift=down · mouse-look · Esc=exit", true);
     }
 
     function disableWalk() {
@@ -641,8 +656,8 @@
         case "KeyA": walkKeys.a = true; break;
         case "KeyS": walkKeys.s = true; break;
         case "KeyD": walkKeys.d = true; break;
-        case "ShiftLeft": case "ShiftRight": walkKeys.shift = true; break;
-        case "Space": walkKeys.space = true; e.preventDefault(); break;
+        case "ShiftLeft": case "ShiftRight": walkKeys.shift = true; e.preventDefault(); break;  // descend
+        case "Space": walkKeys.space = true; e.preventDefault(); break;                          // ascend
       }
     });
     document.addEventListener("keyup", (e) => {
@@ -658,22 +673,100 @@
 
     function updateWalk(dt) {
       if (!walkActive || !walkControls) return;
-      const speed = walkKeys.shift ? RUN_SPEED : WALK_SPEED;
+      // Horizontal velocity damping + acceleration (fly-mode behavior)
       walkVelocity.x -= walkVelocity.x * 10 * dt;
+      walkVelocity.y -= walkVelocity.y * 10 * dt;
       walkVelocity.z -= walkVelocity.z * 10 * dt;
       walkDirection.z = Number(walkKeys.w) - Number(walkKeys.s);
       walkDirection.x = Number(walkKeys.d) - Number(walkKeys.a);
+      walkDirection.y = Number(walkKeys.space) - Number(walkKeys.shift);  // up - down
       walkDirection.normalize();
-      if (walkKeys.w || walkKeys.s) walkVelocity.z -= walkDirection.z * speed * 40 * dt;
-      if (walkKeys.a || walkKeys.d) walkVelocity.x -= walkDirection.x * speed * 40 * dt;
+      const accel = WALK_SPEED * 40;
+      if (walkKeys.w || walkKeys.s) walkVelocity.z -= walkDirection.z * accel * dt;
+      if (walkKeys.a || walkKeys.d) walkVelocity.x -= walkDirection.x * accel * dt;
+      if (walkKeys.space || walkKeys.shift) walkVelocity.y += walkDirection.y * accel * dt;
       walkControls.moveRight(-walkVelocity.x * dt);
       walkControls.moveForward(-walkVelocity.z * dt);
+      // Vertical movement — direct y translation (PointerLockControls doesn't have moveUp)
+      walkControls.object.position.y += walkVelocity.y * dt;
     }
+
+    // ── 360° panorama mode ──
+    // Render an equirectangular HDR / JPG photo on the inside of a sphere
+    // with the camera at center. Drag to look around — Street-View style.
+    let panoMesh = null;
+    let panoTexture = null;
+    async function loadPanorama(url) {
+      setStatus(`Loading panorama…`);
+      disposeRoot();
+      if (splatViewer) {
+        try { await splatViewer.dispose(); } catch (_) {}
+        splatViewer = null;
+        camera.up.set(0, 1, 0);
+      }
+      if (panoMesh) {
+        scene.remove(panoMesh);
+        panoMesh.geometry.dispose();
+        panoMesh.material.dispose();
+        panoMesh = null;
+      }
+      if (panoTexture) { panoTexture.dispose(); panoTexture = null; }
+
+      try {
+        const isHdr = /\.hdr$/i.test(url);
+        const loader = isHdr ? new RGBELoader() : new THREE.TextureLoader();
+        panoTexture = await new Promise((resolve, reject) =>
+          loader.load(url, resolve, undefined, reject)
+        );
+        panoTexture.mapping = THREE.EquirectangularReflectionMapping;
+        panoTexture.colorSpace = THREE.SRGBColorSpace;
+
+        const geo = new THREE.SphereGeometry(500, 60, 40);
+        geo.scale(-1, 1, 1);  // invert normals so we see the inside
+        const mat = new THREE.MeshBasicMaterial({ map: panoTexture });
+        panoMesh = new THREE.Mesh(geo, mat);
+        scene.add(panoMesh);
+
+        // Camera at center, looking forward; orbit becomes pure rotation
+        grid.visible = false;
+        camera.position.set(0, 0, 0.01);  // tiny offset to prevent gimbal
+        controls.target.set(0, 0, 0);
+        controls.enableZoom = true;        // limited zoom = "field of view"
+        controls.enablePan = false;        // no translation — center-locked
+        controls.minDistance = 0.01;
+        controls.maxDistance = 100;
+        controls.update();
+
+        setStatus(`360°: ${url.split("/").pop()}`, true);
+        document.getElementById("i-verts").textContent = "—";
+        document.getElementById("i-tris").textContent = "—";
+        document.getElementById("i-mats").textContent = "360° pano";
+        document.getElementById("i-bounds").textContent = "sphere @ center";
+      } catch (err) {
+        console.error("pano load error:", err);
+        setStatus(`Pano load failed: ${err.message}`);
+      }
+    }
+    document.querySelectorAll("button[data-pano]").forEach((btn) => {
+      btn.addEventListener("click", () => loadPanorama(`samples/panoramas/${btn.dataset.pano}`));
+    });
 
     // Sample loaders — fetch the file then push through the normal loader.
     // Buttons declare their target via data-sample="filename" so we can have
     // many samples without N near-identical handlers.
     async function loadSampleUrl(url) {
+      // Switching from pano back to mesh? Clean up.
+      if (panoMesh) {
+        scene.remove(panoMesh);
+        panoMesh.geometry.dispose();
+        panoMesh.material.dispose();
+        panoMesh = null;
+        if (panoTexture) { panoTexture.dispose(); panoTexture = null; }
+        grid.visible = true;
+        controls.enablePan = true;
+        controls.minDistance = 0;
+        controls.maxDistance = Infinity;
+      }
       setStatus(`Fetching ${url.split("/").pop()}…`);
       const resp = await fetch(url);
       if (!resp.ok) {
